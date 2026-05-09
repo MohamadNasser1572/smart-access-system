@@ -1,6 +1,6 @@
 import cv2
 
-from database import log_event
+from database import log_event, stop_logging
 from face_recognition_module import load_faces, recognize
 from risk_engine import calculate_risk
 
@@ -10,6 +10,8 @@ def run_system() -> None:
 
     cap = cv2.VideoCapture(0)
     window_name = "System"
+    frame_count = 0
+    last_detections = []
 
     try:
         while True:
@@ -17,13 +19,14 @@ def run_system() -> None:
             if not ret:
                 break
 
-            detections = recognize(frame)
+            frame_count += 1
+
+            if frame_count % 3 == 0:
+                last_detections = recognize(frame)
+
             annotated_frame = frame.copy()
 
-            if not detections:
-                print("[debug] no face detections to annotate")
-
-            for detection in detections:
+            for detection in last_detections:
                 top, right, bottom, left = detection.location
                 risk = calculate_risk(detection.name)
                 label = f"{detection.name} | {detection.confidence:.1f}% | {risk}"
@@ -40,14 +43,15 @@ def run_system() -> None:
                     1,
                 )
 
-                if detection.name == "Unknown":
-                    print(f"Detected: Unknown | Distance: {detection.distance:.4f} | Risk: {risk}")
-                else:
-                    print(
-                        f"Detected: {detection.name} | Match: {detection.confidence:.1f}% | "
-                        f"Distance: {detection.distance:.4f} | Risk: {risk}"
-                    )
-                log_event(detection.name, risk)
+                if frame_count % 3 == 0:
+                    if detection.name == "Unknown":
+                        print(f"Detected: Unknown | Distance: {detection.distance:.4f} | Risk: {risk}")
+                    else:
+                        print(
+                            f"Detected: {detection.name} | Match: {detection.confidence:.1f}% | "
+                            f"Distance: {detection.distance:.4f} | Risk: {risk}"
+                        )
+                    log_event(detection.name, risk)
 
             cv2.imshow(window_name, annotated_frame)
 
@@ -57,6 +61,7 @@ def run_system() -> None:
             if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
                 break
     finally:
+        stop_logging()
         cap.release()
         cv2.destroyAllWindows()
 
