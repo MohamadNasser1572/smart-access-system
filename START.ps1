@@ -1,7 +1,8 @@
 # Smart Access System - Startup Script
-# Run from D:\smart-access-system
+# Run from the project folder that contains this script
 
-Set-Location "D:\smart-access-system"
+$ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $ProjectRoot
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 
 # Activate venv
