@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useRef, useState } from 'react'
 import './EnrollmentForm.css'
 
 function EnrollmentForm({ onSuccess }) {
@@ -10,7 +10,13 @@ function EnrollmentForm({ onSuccess }) {
   const [error, setError] = useState('')
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
+  const fileInputRef = useRef(null)
   const [cameraActive, setCameraActive] = useState(false)
+
+  const loadPhotoFromBlob = (blob) => {
+    setPhoto(blob)
+    setPhotoPreview(URL.createObjectURL(blob))
+  }
 
   const startCamera = async () => {
     try {
@@ -18,9 +24,15 @@ function EnrollmentForm({ onSuccess }) {
         video: { facingMode: 'user' },
       })
       videoRef.current.srcObject = stream
+      setError('')
       setCameraActive(true)
     } catch (err) {
-      setError('Cannot access camera: ' + err.message)
+      const denied = err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError'
+      setError(
+        denied
+          ? 'Camera permission was denied. Use Upload Photo instead, or allow camera access in your browser settings.'
+          : 'Cannot access camera: ' + err.message,
+      )
     }
   }
 
@@ -34,15 +46,31 @@ function EnrollmentForm({ onSuccess }) {
     context.drawImage(video, 0, 0)
 
     canvas.toBlob((blob) => {
-      setPhoto(blob)
-      setPhotoPreview(canvas.toDataURL('image/jpeg'))
+      loadPhotoFromBlob(blob)
       stopCamera()
     }, 'image/jpeg')
+  }
+
+  const handleFileSelect = (event) => {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
+
+    setError('')
+    setCameraActive(false)
+    if (videoRef.current && videoRef.current.srcObject) {
+      videoRef.current.srcObject.getTracks().forEach((track) => track.stop())
+      videoRef.current.srcObject = null
+    }
+
+    loadPhotoFromBlob(file)
   }
 
   const stopCamera = () => {
     if (videoRef.current && videoRef.current.srcObject) {
       videoRef.current.srcObject.getTracks().forEach((track) => track.stop())
+      videoRef.current.srcObject = null
       setCameraActive(false)
     }
   }
@@ -131,14 +159,32 @@ function EnrollmentForm({ onSuccess }) {
 
       <div className="camera-section">
         {!cameraActive ? (
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={startCamera}
-            disabled={loading}
-          >
-            📷 Start Camera
-          </button>
+          <div className="camera-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={startCamera}
+              disabled={loading}
+            >
+              📷 Start Camera
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={loading}
+            >
+              ⬆ Upload Photo
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              capture="user"
+              onChange={handleFileSelect}
+              className="hidden-file-input"
+            />
+          </div>
         ) : (
           <div className="camera-container">
             <video

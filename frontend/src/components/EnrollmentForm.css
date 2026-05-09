@@ -43,6 +43,16 @@
     flex-direction: column;
 }
 
+.camera-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.hidden-file-input {
+    display: none;
+}
+
 .camera-container {
     display: flex;
     flex-direction: column;
