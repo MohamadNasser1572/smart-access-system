@@ -63,7 +63,6 @@ def run_system(stop_event: Optional[Event] = None) -> None:
                 top, right, bottom, left = detection.location
                 risk = calculate_risk(detection.name)
                 label = f"{detection.name} | {detection.confidence:.1f}% | {risk}"
-
                 cv2.rectangle(annotated_frame, (left, top), (right, bottom), (0, 0, 255), 2)
                 cv2.rectangle(annotated_frame, (left, bottom - 28), (right, bottom), (0, 0, 255), cv2.FILLED)
                 cv2.putText(
@@ -75,7 +74,6 @@ def run_system(stop_event: Optional[Event] = None) -> None:
                     (255, 255, 255),
                     1,
                 )
-
                 if frame_count % 3 == 0:
                     if detection.name == "Unknown":
                         print(f"Detected: Unknown | Distance: {detection.distance:.4f} | Risk: {risk}")
@@ -97,16 +95,12 @@ def run_system(stop_event: Optional[Event] = None) -> None:
                             "risk": risk,
                         })
                     log_event(detection.name, risk)
-
-        # Keep the buffer from growing indefinitely
-        if len(_recent_detections) > _MAX_DETECTIONS:
-            _recent_detections.pop(0)
-
+            # Keep the buffer from growing indefinitely
+            if len(_recent_detections) > _MAX_DETECTIONS:
+                _recent_detections.pop(0)
             cv2.imshow(window_name, annotated_frame)
-
             if cv2.waitKey(1) & 0xFF == 27:
                 break
-
             if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
                 break
     finally:
