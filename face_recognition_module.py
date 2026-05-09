@@ -12,6 +12,8 @@ known_names: List[str] = []
 
 RECOGNITION_TOLERANCE = 0.5
 FACE_RESIZE_SCALE = 0.25
+# Use a smaller scale when loading enrollment images to save memory
+LOAD_IMAGE_SCALE = 0.15
 FRAME_SKIP = 5
 DEBUG = os.getenv("SMART_ACCESS_DEBUG", "1").strip().lower() not in {"0", "false", "no", "off"}
 
@@ -79,17 +81,34 @@ def load_faces(folder: str = "known_faces") -> None:
                 image = face_recognition.load_image_file(file_path)
                 if DEBUG:
                     print(f"[debug] load_faces: loaded image from '{file_path}' (shape: {image.shape})")
+                # downscale large enrollment images to reduce memory usage during encoding
+                try:
+                    import cv2 as _cv2
+                    # downscale enrollment images more aggressively
+                    small_image = _cv2.resize(image, None, fx=LOAD_IMAGE_SCALE, fy=LOAD_IMAGE_SCALE)
+                    if DEBUG:
+                        print(f"[debug] load_faces: resized image to {small_image.shape}")
+                except Exception:
+                    small_image = image
             except Exception as e:
                 print(f"[error] load_faces: failed to load image '{file_path}': {e}")
                 continue
 
-            locations = face_recognition.face_locations(image, model="hog")
-            if DEBUG:
-                print(f"[debug] load_faces: detected {len(locations)} face(s) in '{file_name}'")
+            # run detection on the (possibly) downscaled image
+            try:
+                locations = face_recognition.face_locations(small_image, model="hog")
+                if DEBUG:
+                    print(f"[debug] load_faces: detected {len(locations)} face(s) in '{file_name}'")
 
-            encodings = face_recognition.face_encodings(image, locations)
-            if DEBUG:
-                print(f"[debug] load_faces: extracted {len(encodings)} encoding(s) from '{file_name}'")
+                encodings = face_recognition.face_encodings(small_image, locations)
+                if DEBUG:
+                    print(f"[debug] load_faces: extracted {len(encodings)} encoding(s) from '{file_name}'")
+            except Exception as ex:
+                import traceback
+
+                print(f"[error] load_faces: exception during detection/encoding for '{file_name}': {ex}")
+                traceback.print_exc()
+                raise
 
             if not encodings:
                 print(f"Skipped {file_name}: no face found")
@@ -116,8 +135,8 @@ def load_faces(folder: str = "known_faces") -> None:
     for person_name, encodings in grouped_encodings.items():
         if DEBUG:
             print(f"[debug] load_faces: averaging {len(encodings)} encoding(s) for '{person_name}'")
-        centroid = np.mean(encodings, axis=0)
-        known_faces.append(np.asarray(centroid, dtype=np.float64))
+        centroid = np.mean(encodings, axis=0).astype(np.float32)
+        known_faces.append(np.asarray(centroid, dtype=np.float32))
         known_names.append(person_name)
 
     print(f"Loaded {len(known_faces)} known face(s)")

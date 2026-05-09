@@ -1,15 +1,16 @@
-import cv2
 from threading import Thread, Event
 from typing import Optional
 
 from database import log_event, stop_logging
-from face_recognition_module import load_faces, recognize
 from risk_engine import calculate_risk
 
 
 # Runner control globals
 _runner_thread: Optional[Thread] = None
 _stop_event: Event = Event()
+# Store recent detections for UI display
+_recent_detections: list = []
+_MAX_DETECTIONS = 50
 
 
 def run_system(stop_event: Optional[Event] = None) -> None:
@@ -17,7 +18,25 @@ def run_system(stop_event: Optional[Event] = None) -> None:
     and exit when set. If not provided, behavior is unchanged and relies on
     window close / ESC key to stop."""
 
-    load_faces()
+    # Limit BLAS/OMP threads to reduce memory pressure when loading models
+    import os
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+
+    # Import heavy image/face libs lazily so importing this module doesn't
+    # load OpenBLAS/dlib at API import time.
+    import cv2
+    try:
+        from face_recognition_module import load_faces, recognize
+    except Exception as e:
+        print(f"[error] failed to import face_recognition_module: {e}")
+        return
+
+    try:
+        load_faces()
+    except Exception as e:
+        print(f"[error] load_faces() failed: {e}")
+        return
 
     cap = cv2.VideoCapture(0)
     window_name = "System"
@@ -60,12 +79,28 @@ def run_system(stop_event: Optional[Event] = None) -> None:
                 if frame_count % 3 == 0:
                     if detection.name == "Unknown":
                         print(f"Detected: Unknown | Distance: {detection.distance:.4f} | Risk: {risk}")
+                        _recent_detections.append({
+                            "name": "Unknown",
+                            "confidence": 0.0,
+                            "distance": detection.distance,
+                            "risk": risk,
+                        })
                     else:
                         print(
                             f"Detected: {detection.name} | Match: {detection.confidence:.1f}% | "
                             f"Distance: {detection.distance:.4f} | Risk: {risk}"
                         )
+                        _recent_detections.append({
+                            "name": detection.name,
+                            "confidence": detection.confidence,
+                            "distance": detection.distance,
+                            "risk": risk,
+                        })
                     log_event(detection.name, risk)
+
+        # Keep the buffer from growing indefinitely
+        if len(_recent_detections) > _MAX_DETECTIONS:
+            _recent_detections.pop(0)
 
             cv2.imshow(window_name, annotated_frame)
 
@@ -108,6 +143,11 @@ def stop_system(timeout: float = 5.0) -> bool:
 
 def is_system_running() -> bool:
     return _runner_thread is not None and _runner_thread.is_alive()
+
+
+def get_recent_detections() -> list:
+    """Return copy of recent detections."""
+    return list(_recent_detections)
 
 
 if __name__ == "__main__":

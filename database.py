@@ -2,7 +2,7 @@ import os
 import sqlite3
 from queue import Queue
 from threading import Thread
-from typing import List
+from typing import List, Tuple
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "system.db")
 

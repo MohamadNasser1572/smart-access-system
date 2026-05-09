@@ -1,12 +1,14 @@
+import os
 import base64
 import io
 import os
+
+# Limit BLAS/OMP threads early to reduce memory pressure when native libs load
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 import sqlite3
 from typing import List, Tuple
 
-import cv2
-import face_recognition
-import numpy as np
 from fastapi import FastAPI, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -72,6 +74,11 @@ def enroll_face(request: EnrollRequest) -> dict:
     os.makedirs(known_faces_dir, exist_ok=True)
 
     try:
+        # Import heavy image/face libs lazily to avoid loading them at startup
+        import numpy as np
+        import cv2
+        import face_recognition
+
         photo_data = base64.b64decode(request.photo_base64)
         nparr = np.frombuffer(photo_data, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -112,8 +119,16 @@ def enroll_face(request: EnrollRequest) -> dict:
 
 @app.get("/status")
 def get_status() -> dict:
-    from face_recognition_module import known_names, known_faces as loaded_faces
-    # import main here to avoid circular import at module import time
+    # Avoid importing face_recognition_module here (heavy) to keep /status lightweight.
+    try:
+        faces = get_all_faces()
+        loaded_identities = [name for name, _ in faces]
+        loaded_count = len(loaded_identities)
+    except Exception:
+        loaded_identities = []
+        loaded_count = 0
+
+    # import main here to check running state; main imports are light now
     try:
         import main as main_module
         system_running = main_module.is_system_running()
@@ -122,10 +137,10 @@ def get_status() -> dict:
 
     return {
         "status": "running",
-        "loaded_identities": known_names,
-        "loaded_count": len(loaded_faces),
+        "loaded_identities": loaded_identities,
+        "loaded_count": loaded_count,
         "system_running": system_running,
-        "api_version": "1.0"
+        "api_version": "1.0",
     }
 
 
@@ -188,3 +203,13 @@ def remove_enrolled_face(name: str) -> dict:
         "name": name,
         "message": f"Face '{name}' removed successfully",
     }
+
+
+@app.get("/detections")
+def get_detections() -> dict:
+    try:
+        import main as main_module
+        recent = main_module.get_recent_detections()
+        return {"detections": recent}
+    except Exception as e:
+        return {"detections": [], "error": str(e)}
