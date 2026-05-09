@@ -113,12 +113,48 @@ def enroll_face(request: EnrollRequest) -> dict:
 @app.get("/status")
 def get_status() -> dict:
     from face_recognition_module import known_names, known_faces as loaded_faces
+    # import main here to avoid circular import at module import time
+    try:
+        import main as main_module
+        system_running = main_module.is_system_running()
+    except Exception:
+        system_running = False
+
     return {
         "status": "running",
         "loaded_identities": known_names,
         "loaded_count": len(loaded_faces),
+        "system_running": system_running,
         "api_version": "1.0"
     }
+
+
+@app.post("/system/start")
+def api_start_system() -> dict:
+    try:
+        import main as main_module
+
+        started = main_module.start_system()
+        if not started:
+            return {"status": "already_running"}
+
+        return {"status": "started"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/system/stop")
+def api_stop_system() -> dict:
+    try:
+        import main as main_module
+
+        stopped = main_module.stop_system()
+        if not stopped:
+            return {"status": "not_running"}
+
+        return {"status": "stopped"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/reload-faces")

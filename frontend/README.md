@@ -14,6 +14,7 @@ A beautiful React UI for managing face enrollment, removal, and risk level confi
 ## Quick Start
 
 ### Prerequisites
+
 - Node.js 16+ and npm
 
 ### Installation & Setup
@@ -27,6 +28,7 @@ npm run dev
 The React app will start at `http://localhost:3000`
 
 **Make sure the FastAPI backend is running first:**
+
 ```bash
 # In the parent directory
 python main.py  # or START.ps1 option 4

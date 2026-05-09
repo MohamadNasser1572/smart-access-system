@@ -1,11 +1,22 @@
 import cv2
+from threading import Thread, Event
+from typing import Optional
 
 from database import log_event, stop_logging
 from face_recognition_module import load_faces, recognize
 from risk_engine import calculate_risk
 
 
-def run_system() -> None:
+# Runner control globals
+_runner_thread: Optional[Thread] = None
+_stop_event: Event = Event()
+
+
+def run_system(stop_event: Optional[Event] = None) -> None:
+    """Main camera loop. If `stop_event` is provided, the loop will check it
+    and exit when set. If not provided, behavior is unchanged and relies on
+    window close / ESC key to stop."""
+
     load_faces()
 
     cap = cv2.VideoCapture(0)
@@ -15,6 +26,9 @@ def run_system() -> None:
 
     try:
         while True:
+            if stop_event is not None and stop_event.is_set():
+                break
+
             ret, frame = cap.read()
             if not ret:
                 break
@@ -66,5 +80,36 @@ def run_system() -> None:
         cv2.destroyAllWindows()
 
 
+def start_system() -> bool:
+    """Start the camera system in a background thread. Returns True if started, False if already running."""
+    global _runner_thread, _stop_event
+    if _runner_thread is not None and _runner_thread.is_alive():
+        return False
+
+    _stop_event = Event()
+    _runner_thread = Thread(target=run_system, args=(_stop_event,), daemon=True)
+    _runner_thread.start()
+    return True
+
+
+def stop_system(timeout: float = 5.0) -> bool:
+    """Signal the running system to stop and wait up to `timeout` seconds for it to join."""
+    global _runner_thread, _stop_event
+    if _runner_thread is None or not _runner_thread.is_alive():
+        return False
+
+    _stop_event.set()
+    _runner_thread.join(timeout=timeout)
+    stopped = not _runner_thread.is_alive()
+    if stopped:
+        _runner_thread = None
+    return stopped
+
+
+def is_system_running() -> bool:
+    return _runner_thread is not None and _runner_thread.is_alive()
+
+
 if __name__ == "__main__":
+    # allow running directly for local testing
     run_system()
