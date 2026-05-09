@@ -47,14 +47,22 @@ function App() {
     fetchFaces()
     fetchStatus()
 
-    // Poll status and detections every 500ms if system is running
+    // Poll status frequently, but only fetch detections when the system is running.
     const interval = setInterval(() => {
       fetchStatus()
-      fetchDetections()
-    }, 500)
+    }, 1000)
 
-    return () => clearInterval(interval)
-  }, [])
+    const detectionInterval = setInterval(() => {
+      if (systemRunning) {
+        fetchDetections()
+      }
+    }, 1000)
+
+    return () => {
+      clearInterval(interval)
+      clearInterval(detectionInterval)
+    }
+  }, [systemRunning])
 
   const handleEnrollSuccess = () => {
     setMessage('Face enrolled successfully!')

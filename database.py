@@ -1,13 +1,14 @@
 import os
 import sqlite3
 from queue import Queue
-from threading import Thread
+from threading import Lock, Thread
 from typing import List, Tuple
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "system.db")
 
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 cursor = conn.cursor()
+db_lock = Lock()
 
 cursor.execute(
     """
@@ -41,8 +42,9 @@ def _log_worker() -> None:
             break
         name, risk = item
         try:
-            cursor.execute("INSERT INTO logs (name, risk) VALUES (?, ?)", (name, risk))
-            conn.commit()
+            with db_lock:
+                cursor.execute("INSERT INTO logs (name, risk) VALUES (?, ?)", (name, risk))
+                conn.commit()
         except Exception as e:
             print(f"[error] failed to log event: {e}")
 
@@ -67,11 +69,12 @@ def stop_logging() -> None:
 
 def add_face(name: str, risk_level: str) -> bool:
     try:
-        cursor.execute(
-            "INSERT INTO faces (name, risk_level) VALUES (?, ?)",
-            (name, risk_level),
-        )
-        conn.commit()
+        with db_lock:
+            cursor.execute(
+                "INSERT INTO faces (name, risk_level) VALUES (?, ?)",
+                (name, risk_level),
+            )
+            conn.commit()
         return True
     except sqlite3.IntegrityError:
         return False
@@ -82,9 +85,10 @@ def add_face(name: str, risk_level: str) -> bool:
 
 def remove_face(name: str) -> bool:
     try:
-        cursor.execute("DELETE FROM faces WHERE name = ?", (name,))
-        conn.commit()
-        return cursor.rowcount > 0
+        with db_lock:
+            cursor.execute("DELETE FROM faces WHERE name = ?", (name,))
+            conn.commit()
+            return cursor.rowcount > 0
     except Exception as e:
         print(f"[error] failed to remove face: {e}")
         return False
@@ -92,8 +96,9 @@ def remove_face(name: str) -> bool:
 
 def get_all_faces() -> List[Tuple[str, str]]:
     try:
-        cursor.execute("SELECT name, risk_level FROM faces ORDER BY name")
-        return cursor.fetchall()
+        with db_lock:
+            cursor.execute("SELECT name, risk_level FROM faces ORDER BY name")
+            return cursor.fetchall()
     except Exception as e:
         print(f"[error] failed to get faces: {e}")
         return []
@@ -101,8 +106,9 @@ def get_all_faces() -> List[Tuple[str, str]]:
 
 def get_face_risk(name: str) -> str | None:
     try:
-        cursor.execute("SELECT risk_level FROM faces WHERE name = ?", (name,))
-        row = cursor.fetchone()
+        with db_lock:
+            cursor.execute("SELECT risk_level FROM faces WHERE name = ?", (name,))
+            row = cursor.fetchone()
         return row[0] if row else None
     except Exception as e:
         print(f"[error] failed to get face risk: {e}")

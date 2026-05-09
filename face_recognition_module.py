@@ -15,7 +15,7 @@ FACE_RESIZE_SCALE = 0.25
 # Use a smaller scale when loading enrollment images to save memory
 LOAD_IMAGE_SCALE = 0.15
 FRAME_SKIP = 5
-DEBUG = os.getenv("SMART_ACCESS_DEBUG", "1").strip().lower() not in {"0", "false", "no", "off"}
+DEBUG = os.getenv("SMART_ACCESS_DEBUG", "0").strip().lower() not in {"0", "false", "no", "off"}
 
 
 @dataclass(frozen=True)
