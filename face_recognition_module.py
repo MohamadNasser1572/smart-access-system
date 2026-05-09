@@ -41,40 +41,81 @@ def load_faces(folder: str = "known_faces") -> None:
     known_faces.clear()
     known_names.clear()
 
+    if DEBUG:
+        print(f"[debug] load_faces: starting load from '{folder}'")
+
     if not os.path.isdir(folder):
+        if DEBUG:
+            print(f"[debug] load_faces: folder '{folder}' does not exist, creating it")
         os.makedirs(folder, exist_ok=True)
         print(f"Known faces folder created at: {folder}")
         return
 
-    grouped_encodings: dict[str, List[np.ndarray]] = {}
+    if DEBUG:
+        print(f"[debug] load_faces: folder exists at '{folder}'")
 
-    for root, _, file_names in os.walk(folder):
+    grouped_encodings: dict[str, List[np.ndarray]] = {}
+    total_files_scanned = 0
+    total_faces_found = 0
+
+    for root, dirs, file_names in os.walk(folder):
+        if DEBUG:
+            print(f"[debug] load_faces: scanning directory '{root}' with {len(dirs)} subdirs, {len(file_names)} files")
+
         for file_name in file_names:
+            total_files_scanned += 1
             if not _is_image_file(file_name):
+                if DEBUG:
+                    print(f"[debug] load_faces: skipping '{file_name}' (not an image)")
                 continue
 
             file_path = os.path.join(root, file_name)
             person_name = _person_name(folder, file_path)
 
-            image = face_recognition.load_image_file(file_path)
+            if DEBUG:
+                print(f"[debug] load_faces: processing '{file_name}' -> person: '{person_name}'")
+
+            try:
+                image = face_recognition.load_image_file(file_path)
+                if DEBUG:
+                    print(f"[debug] load_faces: loaded image from '{file_path}' (shape: {image.shape})")
+            except Exception as e:
+                print(f"[error] load_faces: failed to load image '{file_path}': {e}")
+                continue
+
             locations = face_recognition.face_locations(image, model="hog")
+            if DEBUG:
+                print(f"[debug] load_faces: detected {len(locations)} face(s) in '{file_name}'")
+
             encodings = face_recognition.face_encodings(image, locations)
+            if DEBUG:
+                print(f"[debug] load_faces: extracted {len(encodings)} encoding(s) from '{file_name}'")
 
             if not encodings:
                 print(f"Skipped {file_name}: no face found")
                 continue
+
+            total_faces_found += len(encodings)
 
             if len(locations) > 1:
                 largest_face_index = max(
                     range(len(locations)),
                     key=lambda index: (locations[index][2] - locations[index][0]) * (locations[index][1] - locations[index][3]),
                 )
+                if DEBUG:
+                    print(f"[debug] load_faces: multiple faces detected in '{file_name}', using largest (index {largest_face_index})")
                 grouped_encodings.setdefault(person_name, []).append(encodings[largest_face_index])
                 continue
 
             grouped_encodings.setdefault(person_name, []).append(encodings[0])
 
+    if DEBUG:
+        print(f"[debug] load_faces: scanned {total_files_scanned} files, found {total_faces_found} total faces")
+        print(f"[debug] load_faces: grouped into {len(grouped_encodings)} identities: {list(grouped_encodings.keys())}")
+
     for person_name, encodings in grouped_encodings.items():
+        if DEBUG:
+            print(f"[debug] load_faces: averaging {len(encodings)} encoding(s) for '{person_name}'")
         centroid = np.mean(encodings, axis=0)
         known_faces.append(np.asarray(centroid, dtype=np.float64))
         known_names.append(person_name)

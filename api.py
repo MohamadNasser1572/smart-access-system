@@ -110,6 +110,32 @@ def enroll_face(request: EnrollRequest) -> dict:
         raise HTTPException(status_code=500, detail=f"Failed to enroll face: {str(e)}")
 
 
+@app.get("/status")
+def get_status() -> dict:
+    from face_recognition_module import known_names, known_faces as loaded_faces
+    return {
+        "status": "running",
+        "loaded_identities": known_names,
+        "loaded_count": len(loaded_faces),
+        "api_version": "1.0"
+    }
+
+
+@app.post("/reload-faces")
+def reload_faces_endpoint() -> dict:
+    from face_recognition_module import load_faces as reload_fn, known_names, known_faces as loaded_faces
+    try:
+        reload_fn()
+        return {
+            "status": "reloaded",
+            "loaded_identities": known_names,
+            "loaded_count": len(loaded_faces),
+            "message": "Known faces reloaded from disk",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reload faces: {str(e)}")
+
+
 @app.delete("/faces/{name}")
 def remove_enrolled_face(name: str) -> dict:
     success = remove_face(name)
@@ -119,7 +145,6 @@ def remove_enrolled_face(name: str) -> dict:
     person_dir = os.path.join("known_faces", name)
     if os.path.isdir(person_dir):
         import shutil
-
         shutil.rmtree(person_dir)
 
     return {
