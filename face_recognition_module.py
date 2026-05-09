@@ -12,7 +12,7 @@ known_names: List[str] = []
 
 RECOGNITION_TOLERANCE = 0.5
 FACE_RESIZE_SCALE = 0.25
-FRAME_SKIP = 3
+FRAME_SKIP = 5
 DEBUG = os.getenv("SMART_ACCESS_DEBUG", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 

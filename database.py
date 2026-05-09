@@ -2,6 +2,7 @@ import os
 import sqlite3
 from queue import Queue
 from threading import Thread
+from typing import List
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "system.db")
 
@@ -14,6 +15,16 @@ cursor.execute(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
         risk TEXT
+    )
+    """
+)
+cursor.execute(
+    """
+    CREATE TABLE IF NOT EXISTS faces (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL,
+        risk_level TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """
 )
@@ -52,3 +63,47 @@ def stop_logging() -> None:
     log_queue.put(None)
     if log_worker_thread:
         log_worker_thread.join(timeout=2)
+
+
+def add_face(name: str, risk_level: str) -> bool:
+    try:
+        cursor.execute(
+            "INSERT INTO faces (name, risk_level) VALUES (?, ?)",
+            (name, risk_level),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    except Exception as e:
+        print(f"[error] failed to add face: {e}")
+        return False
+
+
+def remove_face(name: str) -> bool:
+    try:
+        cursor.execute("DELETE FROM faces WHERE name = ?", (name,))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"[error] failed to remove face: {e}")
+        return False
+
+
+def get_all_faces() -> List[Tuple[str, str]]:
+    try:
+        cursor.execute("SELECT name, risk_level FROM faces ORDER BY name")
+        return cursor.fetchall()
+    except Exception as e:
+        print(f"[error] failed to get faces: {e}")
+        return []
+
+
+def get_face_risk(name: str) -> str | None:
+    try:
+        cursor.execute("SELECT risk_level FROM faces WHERE name = ?", (name,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+    except Exception as e:
+        print(f"[error] failed to get face risk: {e}")
+        return None
