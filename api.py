@@ -151,6 +151,10 @@ def api_start_system() -> dict:
 
         started = main_module.start_system()
         if not started:
+            error = main_module.get_last_start_error()
+            if error:
+                return {"status": "failed", "detail": error}
+
             return {"status": "already_running"}
 
         return {"status": "started"}

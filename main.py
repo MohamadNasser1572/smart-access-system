@@ -1,4 +1,5 @@
 from threading import Thread, Event
+import time
 from typing import Optional
 
 from database import log_event, stop_logging
@@ -8,6 +9,7 @@ from risk_engine import calculate_risk
 # Runner control globals
 _runner_thread: Optional[Thread] = None
 _stop_event: Event = Event()
+_last_start_error: Optional[str] = None
 # Store recent detections for UI display
 _recent_detections: list = []
 _MAX_DETECTIONS = 50
@@ -38,7 +40,14 @@ def run_system(stop_event: Optional[Event] = None) -> None:
         print(f"[error] load_faces() failed: {e}")
         return
 
+    global _last_start_error
+
     cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        _last_start_error = "Unable to open webcam"
+        print("[error] unable to open webcam")
+        return
+
     window_name = "System"
     frame_count = 0
     last_detections = []
@@ -50,6 +59,9 @@ def run_system(stop_event: Optional[Event] = None) -> None:
 
             ret, frame = cap.read()
             if not ret:
+                if frame_count == 0:
+                    _last_start_error = "Unable to read from webcam"
+                    print("[error] unable to read from webcam")
                 break
 
             frame_count += 1
@@ -111,13 +123,21 @@ def run_system(stop_event: Optional[Event] = None) -> None:
 
 def start_system() -> bool:
     """Start the camera system in a background thread. Returns True if started, False if already running."""
-    global _runner_thread, _stop_event
+    global _runner_thread, _stop_event, _last_start_error
     if _runner_thread is not None and _runner_thread.is_alive():
         return False
 
+    _last_start_error = None
     _stop_event = Event()
     _runner_thread = Thread(target=run_system, args=(_stop_event,), daemon=True)
     _runner_thread.start()
+
+    for _ in range(20):
+        if not _runner_thread.is_alive():
+            _runner_thread = None
+            return False
+        time.sleep(0.05)
+
     return True
 
 
@@ -142,6 +162,10 @@ def is_system_running() -> bool:
 def get_recent_detections() -> list:
     """Return copy of recent detections."""
     return list(_recent_detections)
+
+
+def get_last_start_error() -> Optional[str]:
+    return _last_start_error
 
 
 if __name__ == "__main__":

@@ -56,7 +56,7 @@ switch ($choice) {
         Write-Host "Open browser at: http://127.0.0.1:8000/docs" -ForegroundColor Yellow
         Write-Host "Press Ctrl+C to stop`n" -ForegroundColor Yellow
         $env:SMART_ACCESS_DEBUG = "0"
-        python -m uvicorn api:app --host 127.0.0.1 --port 8000 --log-level warning --access-log false
+        python -m uvicorn api:app --host 127.0.0.1 --port 8000 --log-level warning --no-access-log
     }
     
     "3" {
@@ -69,7 +69,7 @@ switch ($choice) {
     "4" {
         Write-Host "`n>>> Starting API in background..." -ForegroundColor Cyan
         $env:SMART_ACCESS_DEBUG = "0"
-        $apiProc = Start-Process -FilePath python -ArgumentList '-m', 'uvicorn', 'api:app', '--host', '127.0.0.1', '--port', '8000', '--log-level', 'warning', '--access-log', 'false' -PassThru
+        $apiProc = Start-Process -FilePath python -ArgumentList '-m', 'uvicorn', 'api:app', '--host', '127.0.0.1', '--port', '8000', '--log-level', 'warning', '--no-access-log' -PassThru
         Write-Host "✓ API started (PID: $($apiProc.Id))" -ForegroundColor Green
         Write-Host "✓ API docs at: http://127.0.0.1:8000/docs" -ForegroundColor Green
         Write-Host "✓ Logs endpoint at: http://127.0.0.1:8000/logs" -ForegroundColor Green

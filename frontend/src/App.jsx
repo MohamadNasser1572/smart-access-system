@@ -4,6 +4,7 @@ import FacesList from './components/FacesList'
 import './App.css'
 
 function App() {
+  const API_BASE = '/api'
   const [faces, setFaces] = useState([])
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
@@ -12,7 +13,7 @@ function App() {
 
   const fetchFaces = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:8000/faces')
+      const response = await fetch(`${API_BASE}/faces`)
       const data = await response.json()
       setFaces(data)
     } catch (error) {
@@ -25,7 +26,7 @@ function App() {
 
   const fetchStatus = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/status')
+      const res = await fetch(`${API_BASE}/status`)
       const data = await res.json()
       setSystemRunning(Boolean(data.system_running))
     } catch (err) {
@@ -35,7 +36,7 @@ function App() {
 
   const fetchDetections = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/detections')
+      const res = await fetch(`${API_BASE}/detections`)
       const data = await res.json()
       setDetections(data.detections || [])
     } catch (err) {
@@ -78,12 +79,15 @@ function App() {
 
   const startSystem = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/system/start', { method: 'POST' })
+      const res = await fetch(`${API_BASE}/system/start`, { method: 'POST' })
       const data = await res.json()
       if (data.status === 'started' || data.status === 'already_running') {
         setSystemRunning(true)
         setMessage('System started')
         setTimeout(() => setMessage(''), 2500)
+      } else if (data.status === 'failed') {
+        setSystemRunning(false)
+        setMessage(data.detail ? `Failed to start system: ${data.detail}` : 'Failed to start system')
       }
     } catch (err) {
       console.error('Failed to start system', err)
@@ -93,7 +97,7 @@ function App() {
 
   const stopSystem = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/system/stop', { method: 'POST' })
+      const res = await fetch(`${API_BASE}/system/stop`, { method: 'POST' })
       const data = await res.json()
       if (data.status === 'stopped' || data.status === 'not_running') {
         setSystemRunning(false)
