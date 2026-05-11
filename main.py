@@ -75,8 +75,22 @@ def run_system(stop_event: Optional[Event] = None) -> None:
                 top, right, bottom, left = detection.location
                 risk = calculate_risk(detection.name)
                 label = f"{detection.name} | {detection.confidence:.1f}% | {risk}"
-                cv2.rectangle(annotated_frame, (left, top), (right, bottom), (0, 0, 255), 2)
-                cv2.rectangle(annotated_frame, (left, bottom - 28), (right, bottom), (0, 0, 255), cv2.FILLED)
+                risk_normalized = risk.strip().lower()
+                is_unknown = detection.name.strip().lower() == "unknown"
+
+                if is_unknown:
+                    # Unknown detections are always red.
+                    box_color = (0, 0, 255)
+                elif risk_normalized == "low":
+                    box_color = (0, 255, 0)
+                elif risk_normalized == "medium":
+                    box_color = (0, 165, 255)
+                else:
+                    # Keep High risk known identities red for safety signaling.
+                    box_color = (0, 0, 255)
+
+                cv2.rectangle(annotated_frame, (left, top), (right, bottom), box_color, 2)
+                cv2.rectangle(annotated_frame, (left, bottom - 28), (right, bottom), box_color, cv2.FILLED)
                 cv2.putText(
                     annotated_frame,
                     label,
