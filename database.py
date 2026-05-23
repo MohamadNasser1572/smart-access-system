@@ -70,14 +70,21 @@ def stop_logging() -> None:
 def add_face(name: str, risk_level: str) -> bool:
     try:
         with db_lock:
-            cursor.execute(
-                "INSERT INTO faces (name, risk_level) VALUES (?, ?)",
-                (name, risk_level),
-            )
+            cursor.execute("SELECT 1 FROM faces WHERE name = ?", (name,))
+            exists = cursor.fetchone() is not None
+
+            if exists:
+                cursor.execute(
+                    "UPDATE faces SET risk_level = ? WHERE name = ?",
+                    (risk_level, name),
+                )
+            else:
+                cursor.execute(
+                    "INSERT INTO faces (name, risk_level) VALUES (?, ?)",
+                    (name, risk_level),
+                )
             conn.commit()
         return True
-    except sqlite3.IntegrityError:
-        return False
     except Exception as e:
         print(f"[error] failed to add face: {e}")
         return False

@@ -98,18 +98,25 @@ def enroll_face(request: EnrollRequest) -> dict:
         person_dir = os.path.join(known_faces_dir, request.name)
         os.makedirs(person_dir, exist_ok=True)
 
-        photo_path = os.path.join(person_dir, f"1.jpg")
+        existing_indices = []
+        for file_name in os.listdir(person_dir):
+            base_name, extension = os.path.splitext(file_name)
+            if extension.lower() in {".jpg", ".jpeg", ".png", ".bmp", ".webp"} and base_name.isdigit():
+                existing_indices.append(int(base_name))
+
+        next_index = max(existing_indices, default=0) + 1
+        photo_path = os.path.join(person_dir, f"{next_index}.jpg")
         cv2.imwrite(photo_path, frame)
 
-        success = add_face(request.name, request.risk_level)
-        if not success:
-            raise HTTPException(status_code=400, detail=f"Face '{request.name}' already enrolled")
+        if not add_face(request.name, request.risk_level):
+            raise HTTPException(status_code=500, detail=f"Failed to save face record for '{request.name}'")
 
         return {
             "status": "enrolled",
             "name": request.name,
             "risk_level": request.risk_level,
-            "message": f"Face '{request.name}' enrolled successfully",
+            "photo_index": next_index,
+            "message": f"Saved photo {next_index} for '{request.name}'",
         }
     except HTTPException:
         raise
