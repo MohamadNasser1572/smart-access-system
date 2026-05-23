@@ -1,150 +1,110 @@
-# Privacy-First Edge AI Smart Access System (Software Version)
+# Privacy-First Edge AI Smart Access System
 
-Runs 100% locally on your laptop.
+This project is a local, privacy-first face-recognition access demo that runs entirely on your machine. It detects faces from a webcam, matches them against enrolled identities, computes a simple risk level, and logs events to a local SQLite database.
 
-## 1) Tech Stack (Exact)
+## Problem Solved
 
-- Language: Python
-- Core Libraries: OpenCV, face_recognition, numpy
-- Backend/API: FastAPI
-- Database: SQLite
-- API Testing: Postman
-- Optional Bonus: Docker
+Many access-control demos rely on cloud services. This project demonstrates an on-device solution that preserves privacy by keeping video, face data, and risk decisions local while still providing a usable web UI for enrollment and monitoring.
 
-## 2) System Architecture
+## What the Project Does
 
-Modules:
+- Captures webcam frames and performs face detection/recognition.
+- Lets users enroll identities (multiple photos per person).
+- Computes a simple risk level per detection and colors the UI overlay.
+- Exposes a small REST API for status, faces, detections, and logs.
 
-- Camera Module (`camera.py`)
-- Face Recognition Module (`face_recognition_module.py`)
-- Risk Engine (`risk_engine.py`)
-- API Server (`api.py`)
-- Database (`database.py`)
+## Components & Frameworks
 
-## 3) Project Structure
+- Backend: Python, FastAPI
+- Face stack: OpenCV, face_recognition, numpy
+- Database: SQLite (lightweight local storage)
+- Frontend: React (Vite)
 
-```text
-smart-access-system/
-├─ main.py
-├─ camera.py
-├─ face_recognition_module.py
-├─ risk_engine.py
-├─ database.py
-├─ api.py
-├─ Dockerfile
-├─ requirements.txt
-├─ models/
-├─ data/
-├─ known_faces/
-└─ docs/
-```
+## Run the Frontend (dev)
 
-## 4) Step-by-Step Implementation
-
-### STEP 1 — Setup Environment
+1. Open a terminal and go to the frontend folder:
 
 ```powershell
-cd "D:\smart-access-system"
+cd D:\smart-access-system\frontend
+```
+
+2. Install dependencies (first time only):
+
+```powershell
+npm install
+```
+
+3. Start the dev server (this will also ensure the backend is available):
+
+```powershell
+npm run dev
+```
+
+4. Open the UI in your browser at `http://localhost:3000`.
+
+Notes:
+- The frontend dev script prefers to start the backend automatically. If the API is not running, you can start it manually from the project root (see below).
+- Use `localhost` (not `file://` or an IP) so the browser treats the page as a secure context and allows camera access.
+
+## Start the Backend (if needed)
+
+From the project root:
+
+```powershell
+cd D:\smart-access-system
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-```
-
-### STEP 2 — Camera Module
-
-Implemented in `camera.py`.
-
-- Captures webcam frames
-- Shows live window
-- Exits on ESC key
-
-### STEP 3 — Face Recognition Module
-
-Implemented in `face_recognition_module.py`.
-
-- Loads known faces from `known_faces/`
-- Uses `face_recognition` face locations and encodings directly
-- Supports multiple enrollment images per person
-- Averages known encodings per identity for better stability
-- Returns recognized name, match confidence, or `Unknown`
-
-### STEP 4 — Risk Engine
-
-Implemented in `risk_engine.py`.
-
-- `Unknown` → `High`
-- Known person → `Low`
-
-### STEP 5 — Database (SQLite)
-
-Implemented in `database.py`.
-
-- Auto-creates `system.db`
-- Creates `logs` table if missing
-- Stores `(name, risk)` events
-
-### STEP 6 — Main System
-
-Implemented in `main.py`.
-
-- Loads faces
-- Starts webcam stream
-- Recognizes person + computes risk
-- Logs each event to SQLite
-
-Run:
-
-```powershell
 python main.py
 ```
 
-### STEP 7 — API (FastAPI)
-
-Implemented in `api.py`.
-
-Run:
+Or run the API directly with Uvicorn:
 
 ```powershell
-uvicorn api:app --reload
+uvicorn api:app --reload --port 8000
 ```
 
-### STEP 8 — Postman Test
+## Using the UI: start system & camera
 
-- Method: `GET`
-- URL: `http://127.0.0.1:8000/logs`
-- Returns access logs from `system.db`
+1. Open `http://localhost:3000` in Chrome/Edge/Firefox.
+2. Click the **Start System** button in the UI to start background detection (this sends the `/system/start` request to the backend).
+3. For enrollment, open the Enrollment panel and either:
+	- Click **Start Camera** to allow the browser to use your webcam, then **Capture Photo** to take a picture; or
+	- Click **Upload Photo** to provide an image file if camera access is denied or unavailable.
+4. If the camera permission is denied, follow browser prompts or allow the site under browser settings (see troubleshooting below).
+5. Use the UI monitoring page to see live detections (name, confidence, distance, and risk color).
 
-### STEP 9 — Docker (Optional Bonus)
+## Camera troubleshooting
 
-```powershell
-docker build -t smart-access-system .
-docker run --rm smart-access-system
+- Ensure the page is opened from `http://localhost:3000` and the browser is allowed to access the camera for that origin.
+- Check OS camera permissions (Windows: Settings → Privacy → Camera).
+- Close other apps that might be using the camera.
+- In DevTools Console, run:
+
+```js
+navigator.permissions.query({ name: 'camera' }).then(s => console.log(s.state))
 ```
 
-### STEP 10 — Demo Checklist
+## Enrollment notes
 
-- Webcam feed works
-- Face recognition works
-- Risk classification appears
-- Events are logged in SQLite
-- Logs are visible via API endpoint
+- Add multiple clear frontal images per person (the app stores multiple photos per identity in `known_faces/`).
+- Enrollment updates the face database and the frontend will reflect new faces after reload or via the Reload Faces action.
 
-## 5) Documentation / Report Sections
+## Demo checklist
 
-Use `docs/REPORT_TEMPLATE.md` and include:
+- Run backend and frontend, open `http://localhost:3000`.
+- Click **Start System**, verify camera feed and live detections.
+- Enroll a face using camera or upload, verify it appears in the faces list.
+- Show logs via API or UI.
 
-- Introduction
-- Problem
-- Solution
-- System Architecture
-- Implementation
-- UML Diagrams
-- Results
+## Where to look in the code
 
-## Notes
+- `api.py` — REST endpoints
+- `main.py` — system lifecycle and camera loop
+- `face_recognition_module.py` — loading & matching faces
+- `database.py` — SQLite access and logging
+- `frontend/src/components/EnrollmentForm.jsx` — camera + enrollment UI
 
-- Best practice: create one subfolder per person and add several clear images per person, for example `known_faces/alice/1.jpg`, `known_faces/alice/2.jpg`.
-- Root-level files still work, for example `known_faces/alice.jpg`, but multiple reference images are more reliable.
-- Use clear front-facing images with varied lighting and angles for enrollment.
-- If a person image has no detectable face, it is skipped automatically.
-- Everything runs locally for privacy-first operation.
+---
+
+If you want, I can also add a short demo script or a one-page slide deck summarizing the project for your presentation.
