@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, useEffect } from 'react'
 import './EnrollmentForm.css'
 
 function EnrollmentForm({ onSuccess }) {
@@ -12,6 +12,7 @@ function EnrollmentForm({ onSuccess }) {
   const canvasRef = useRef(null)
   const fileInputRef = useRef(null)
   const [cameraActive, setCameraActive] = useState(false)
+  const [stream, setStream] = useState(null)
 
   const loadPhotoFromBlob = (blob) => {
     setPhoto(blob)
@@ -23,7 +24,7 @@ function EnrollmentForm({ onSuccess }) {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user' },
       })
-      videoRef.current.srcObject = stream
+      setStream(stream)
       setError('')
       setCameraActive(true)
     } catch (err) {
@@ -35,6 +36,19 @@ function EnrollmentForm({ onSuccess }) {
       )
     }
   }
+
+  useEffect(() => {
+    if (cameraActive && videoRef.current && stream) {
+      try {
+        videoRef.current.srcObject = stream
+      } catch (e) {
+        console.error('Failed to attach stream to video element', e)
+        setError('Cannot attach camera stream to video element')
+      }
+    }
+
+    return () => { }
+  }, [cameraActive, stream])
 
   const capturePhoto = () => {
     const video = videoRef.current
@@ -59,20 +73,27 @@ function EnrollmentForm({ onSuccess }) {
 
     setError('')
     setCameraActive(false)
-    if (videoRef.current && videoRef.current.srcObject) {
-      videoRef.current.srcObject.getTracks().forEach((track) => track.stop())
-      videoRef.current.srcObject = null
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop())
+      setStream(null)
     }
 
     loadPhotoFromBlob(file)
   }
 
   const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      videoRef.current.srcObject.getTracks().forEach((track) => track.stop())
-      videoRef.current.srcObject = null
-      setCameraActive(false)
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop())
+      setStream(null)
     }
+    if (videoRef.current) {
+      try {
+        videoRef.current.srcObject = null
+      } catch (e) {
+        // ignore
+      }
+    }
+    setCameraActive(false)
   }
 
   const handleSubmit = async (e) => {
