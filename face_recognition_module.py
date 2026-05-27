@@ -16,6 +16,7 @@ FACE_RESIZE_SCALE = 0.25
 LOAD_IMAGE_SCALE = 0.15
 FRAME_SKIP = 5
 DEBUG = os.getenv("SMART_ACCESS_DEBUG", "0").strip().lower() not in {"0", "false", "no", "off"}
+PERSON_RESIZE_SCALE = 0.5
 
 
 @dataclass(frozen=True)
@@ -159,6 +160,45 @@ def _best_match(face_encoding: np.ndarray) -> Tuple[str, float, float]:
     return known_names[best_index], round(confidence, 1), best_distance
 
 
+def _detect_person_presence(frame) -> Tuple[int, int, int, int] | None:
+    """Return an approximate person bounding box when a person is present but no face is visible.
+
+    This is a conservative fallback for cases where someone covers their face.
+    """
+    try:
+        small_frame = cv2.resize(frame, None, fx=PERSON_RESIZE_SCALE, fy=PERSON_RESIZE_SCALE)
+        hog = cv2.HOGDescriptor()
+        hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+        rects, weights = hog.detectMultiScale(
+            small_frame,
+            winStride=(8, 8),
+            padding=(8, 8),
+            scale=1.05,
+        )
+    except Exception as exc:
+        if DEBUG:
+            print(f"[debug] person fallback detection failed: {exc}")
+        return None
+
+    if len(rects) == 0:
+        return None
+
+    best_index = 0
+    if len(weights) == len(rects) and len(weights) > 0:
+        best_index = int(np.argmax(weights))
+    else:
+        best_index = max(range(len(rects)), key=lambda index: rects[index][2] * rects[index][3])
+
+    x, y, w, h = rects[best_index]
+    inverse_scale = int(round(1 / PERSON_RESIZE_SCALE))
+    return (
+        int(y * inverse_scale),
+        int((x + w) * inverse_scale),
+        int((y + h) * inverse_scale),
+        int(x * inverse_scale),
+    )
+
+
 def recognize(frame) -> List[FaceDetection]:
     if not known_faces:
         print("No known faces loaded. Add JPG/PNG images to known_faces/ and restart.")
@@ -171,7 +211,21 @@ def recognize(frame) -> List[FaceDetection]:
     if not face_locations:
         if DEBUG:
             print("[debug] no faces detected in frame")
-        return []
+        suspicious_location = _detect_person_presence(frame)
+        if suspicious_location is None:
+            return []
+
+        if DEBUG:
+            print("[debug] person detected without visible face; marking as suspicious unknown")
+
+        return [
+            FaceDetection(
+                location=suspicious_location,
+                name="Unknown",
+                confidence=0.0,
+                distance=1.0,
+            )
+        ]
 
     face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
     if not face_encodings:
