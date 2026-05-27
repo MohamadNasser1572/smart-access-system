@@ -1,15 +1,18 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import EnrollmentForm from './components/EnrollmentForm'
 import FacesList from './components/FacesList'
 import './App.css'
 
 function App() {
   const API_BASE = '/api'
+  const enrollmentRef = useRef(null)
+  const reviewedPromptKeyRef = useRef('')
   const [faces, setFaces] = useState([])
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
   const [systemRunning, setSystemRunning] = useState(false)
   const [detections, setDetections] = useState([])
+  const [reviewPrompt, setReviewPrompt] = useState(null)
 
   const fetchFaces = async () => {
     try {
@@ -38,10 +41,48 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/detections`)
       const data = await res.json()
-      setDetections(data.detections || [])
+      const nextDetections = data.detections || []
+      setDetections(nextDetections)
+
+      const mediumUnknown = [...nextDetections].reverse().find(
+        (det) => det.name === 'Unknown' && String(det.risk).toLowerCase() === 'medium',
+      )
+
+      if (mediumUnknown) {
+        const promptKey = [
+          mediumUnknown.name,
+          mediumUnknown.risk,
+          Number(mediumUnknown.distance || 0).toFixed(2),
+          Number(mediumUnknown.confidence || 0).toFixed(1),
+        ].join('|')
+
+        if (reviewedPromptKeyRef.current !== promptKey) {
+          setReviewPrompt({ ...mediumUnknown, promptKey })
+        }
+      }
     } catch (err) {
       console.error('Failed to fetch detections', err)
     }
+  }
+
+  const acknowledgePrompt = (nextMessage) => {
+    if (reviewPrompt?.promptKey) {
+      reviewedPromptKeyRef.current = reviewPrompt.promptKey
+    }
+    setReviewPrompt(null)
+    if (nextMessage) {
+      setMessage(nextMessage)
+      setTimeout(() => setMessage(''), 4000)
+    }
+  }
+
+  const handleKnownUnknownFace = () => {
+    acknowledgePrompt('If you know this person, enroll them in the form below so they become a known face.')
+    enrollmentRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  const handleUnknownUnknownFace = () => {
+    acknowledgePrompt('This unknown face will remain suspicious/high risk for now.')
   }
 
   useEffect(() => {
@@ -127,7 +168,7 @@ function App() {
       {message && <div className="message-banner">{message}</div>}
 
       <main className="app-main">
-        <section className="section">
+        <section className="section" ref={enrollmentRef}>
           <h2>Enroll New Face</h2>
           <EnrollmentForm onSuccess={handleEnrollSuccess} />
         </section>
@@ -144,20 +185,53 @@ function App() {
         {systemRunning && (
           <section className="section">
             <h2>📹 Live Detections</h2>
+            {reviewPrompt && (
+              <div
+                style={{
+                  marginBottom: '16px',
+                  padding: '14px',
+                  borderRadius: '10px',
+                  backgroundColor: '#fff4e5',
+                  border: '1px solid #f0ad4e',
+                  color: '#8a5a00',
+                }}
+              >
+                <strong>Do you know this person?</strong>
+                <div style={{ marginTop: '6px', marginBottom: '12px' }}>
+                  An unknown clear face was detected with medium risk. If you know this person, enroll them below so they become known. Otherwise, keep them as high risk.
+                </div>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                  <button className="start-button" onClick={handleKnownUnknownFace}>
+                    Yes, enroll as known
+                  </button>
+                  <button className="start-button" onClick={handleUnknownUnknownFace}>
+                    No, keep as high risk
+                  </button>
+                </div>
+              </div>
+            )}
             {detections.length === 0 ? (
               <p style={{ color: '#999', fontStyle: 'italic' }}>No detections yet...</p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '300px', overflowY: 'auto' }}>
                 {detections.slice(-10).reverse().map((det, idx) => (
-                  <div key={idx} style={{
-                    padding: '10px',
-                    borderRadius: '6px',
-                    backgroundColor: det.name === 'Unknown' ? '#ffe0e0' : '#e0ffe0',
-                    border: det.name === 'Unknown' ? '1px solid #ffcccc' : '1px solid #ccffcc',
-                    fontSize: '14px',
-                  }}>
-                    <strong>{det.name}</strong> {det.name !== 'Unknown' && `| ${det.confidence.toFixed(1)}% match`} | Distance: {det.distance.toFixed(4)} | Risk: <span style={{ color: det.risk === 'High' ? '#d9534f' : det.risk === 'Medium' ? '#f0ad4e' : '#5cb85c', fontWeight: 'bold' }}>{det.risk}</span>
-                  </div>
+                  (() => {
+                    const riskColor = det.risk === 'High' ? '#d9534f' : det.risk === 'Medium' ? '#f0ad4e' : '#5cb85c'
+                    const backgroundColor = det.risk === 'High' ? '#ffe0e0' : det.risk === 'Medium' ? '#fff1d6' : '#e0ffe0'
+                    const borderColor = det.risk === 'High' ? '#ffcccc' : det.risk === 'Medium' ? '#ffd699' : '#ccffcc'
+
+                    return (
+                      <div key={idx} style={{
+                        padding: '10px',
+                        borderRadius: '6px',
+                        backgroundColor,
+                        border: `1px solid ${borderColor}`,
+                        fontSize: '14px',
+                      }}>
+                        <strong>{det.name}</strong> {det.name !== 'Unknown' && `| ${det.confidence.toFixed(1)}% match`} | Distance: {det.distance.toFixed(4)} | Risk: <span style={{ color: riskColor, fontWeight: 'bold' }}>{det.risk}</span>
+                      </div>
+                    )
+                  })()
                 ))}
               </div>
             )}

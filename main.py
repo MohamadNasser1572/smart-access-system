@@ -15,6 +15,21 @@ _recent_detections: list = []
 _MAX_DETECTIONS = 50
 
 
+def _classify_detection_risk(detection) -> str:
+    """Classify a detection into Low, Medium, or High risk.
+
+    Unknown clear faces are treated as Medium risk so the UI can ask the admin
+    whether the person should be enrolled. Covered/no-face detections stay High.
+    """
+    if detection.name.strip().lower() != "unknown":
+        return calculate_risk(detection.name)
+
+    if detection.distance >= 0.95:
+        return "High"
+
+    return "Medium"
+
+
 def run_system(stop_event: Optional[Event] = None) -> None:
     """Main camera loop. If `stop_event` is provided, the loop will check it
     and exit when set. If not provided, behavior is unchanged and relies on
@@ -73,14 +88,14 @@ def run_system(stop_event: Optional[Event] = None) -> None:
 
             for detection in last_detections:
                 top, right, bottom, left = detection.location
-                risk = calculate_risk(detection.name)
+                risk = _classify_detection_risk(detection)
                 label = f"{detection.name} | {detection.confidence:.1f}% | {risk}"
                 risk_normalized = risk.strip().lower()
                 is_unknown = detection.name.strip().lower() == "unknown"
 
                 if is_unknown:
-                    # Unknown detections are always red.
-                    box_color = (0, 0, 255)
+                    # Clear unknown faces are orange; covered/no-face detections stay red.
+                    box_color = (0, 165, 255) if risk_normalized == "medium" else (0, 0, 255)
                 elif risk_normalized == "low":
                     box_color = (0, 255, 0)
                 elif risk_normalized == "medium":
