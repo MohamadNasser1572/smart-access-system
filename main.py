@@ -1,6 +1,10 @@
 from threading import Thread, Event
 import time
+import queue as _queue
 from typing import Optional
+
+# Set by run_system() once load_faces() + camera open have both succeeded.
+_system_ready_event: Event = Event()
 
 from database import log_event, stop_logging
 from risk_engine import calculate_risk
@@ -10,17 +14,19 @@ from risk_engine import calculate_risk
 _runner_thread: Optional[Thread] = None
 _stop_event: Event = Event()
 _last_start_error: Optional[str] = None
-# Store recent detections for UI display
-_recent_detections: list = []
-_MAX_DETECTIONS = 50
+# One entry per person (keyed by name); overwritten every detection so the
+# frontend gets a reactive snapshot rather than a growing history list.
+_recent_detections: dict = {}
+# Tracks the last risk level that was written to the DB for each name so we
+# only insert a new log row when the risk actually changes.
+_last_logged_risk: dict = {}
+# Latest cropped JPEG of an unknown face — served by /api/unknown-face.
+_latest_unknown_face_jpg: Optional[bytes] = None
+# Latest annotated frame JPEG — served by /api/video-feed as an MJPEG stream.
+_latest_frame_jpg: Optional[bytes] = None
 
 
 def _classify_detection_risk(detection) -> str:
-    """Classify a detection into Low, Medium, or High risk.
-
-    Unknown clear faces are treated as Medium risk so the UI can ask the admin
-    whether the person should be enrolled. Covered/no-face detections stay High.
-    """
     if detection.name.strip().lower() != "unknown":
         return calculate_risk(detection.name)
 
@@ -31,39 +37,67 @@ def _classify_detection_risk(detection) -> str:
 
 
 def run_system(stop_event: Optional[Event] = None) -> None:
-    """Main camera loop. If `stop_event` is provided, the loop will check it
-    and exit when set. If not provided, behavior is unchanged and relies on
-    window close / ESC key to stop."""
-
-    # Limit BLAS/OMP threads to reduce memory pressure when loading models
     import os
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     os.environ.setdefault("OMP_NUM_THREADS", "1")
 
-    # Import heavy image/face libs lazily so importing this module doesn't
-    # load OpenBLAS/dlib at API import time.
     import cv2
+    global _last_start_error, _system_ready_event, _latest_unknown_face_jpg, _latest_frame_jpg
+
     try:
         from face_recognition_module import load_faces, recognize
     except Exception as e:
-        print(f"[error] failed to import face_recognition_module: {e}")
+        _last_start_error = f"Failed to import face recognition: {e}"
+        print(f"[error] {_last_start_error}")
         return
 
     try:
         load_faces()
     except Exception as e:
-        print(f"[error] load_faces() failed: {e}")
+        _last_start_error = f"load_faces() failed: {e}"
+        print(f"[error] {_last_start_error}")
         return
 
-    global _last_start_error
-
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        _last_start_error = "Unable to open webcam"
-        print("[error] unable to open webcam")
+    cap = None
+    for cam_index in range(3):
+        candidate = cv2.VideoCapture(cam_index)
+        if candidate.isOpened():
+            cap = candidate
+            break
+        candidate.release()
+    if cap is None:
+        _last_start_error = "Unable to open webcam (tried indices 0, 1, 2)"
+        print("[error] unable to open webcam on indices 0, 1, or 2")
         return
 
-    window_name = "System"
+    # Cap resolution at 640×480 — reduces frame size 3× vs typical 1280×720
+    # default, making frame copy, annotation, display, and recognition all faster.
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+    _system_ready_event.set()
+
+    # Recognition runs in its own thread so the camera loop never blocks on dlib.
+    frame_in: _queue.Queue = _queue.Queue(maxsize=1)
+    detections_out: _queue.Queue = _queue.Queue(maxsize=1)
+
+    def _recognition_worker() -> None:
+        while not (stop_event is not None and stop_event.is_set()):
+            try:
+                frame = frame_in.get(timeout=0.1)
+            except _queue.Empty:
+                continue
+            results = recognize(frame)
+            # Always replace with the freshest result — discard stale.
+            try:
+                detections_out.get_nowait()
+            except _queue.Empty:
+                pass
+            detections_out.put(results)
+
+    rec_thread = Thread(target=_recognition_worker, daemon=True)
+    rec_thread.start()
+
     frame_count = 0
     last_detections = []
 
@@ -81,10 +115,26 @@ def run_system(stop_event: Optional[Event] = None) -> None:
 
             frame_count += 1
 
+            # Send every 3rd frame to the recognition worker (non-blocking).
             if frame_count % 3 == 0:
-                last_detections = recognize(frame)
+                try:
+                    frame_in.put_nowait(frame.copy())
+                except _queue.Full:
+                    pass  # worker still busy; keep current last_detections
 
-            annotated_frame = frame.copy()
+            # Pick up whatever the worker finished last (non-blocking).
+            try:
+                last_detections = detections_out.get_nowait()
+            except _queue.Empty:
+                pass
+
+            # Only copy the frame if there's something to draw on it.
+            annotated_frame = frame.copy() if last_detections else frame
+
+            # Compute risk once per detection and reuse for drawing, logging, and
+            # the detections dict — avoids a duplicate DB lookup each cycle.
+            is_recognition_frame = frame_count % 3 == 0
+            new_detection_entries = {} if is_recognition_frame else None
 
             for detection in last_detections:
                 top, right, bottom, left = detection.location
@@ -94,14 +144,12 @@ def run_system(stop_event: Optional[Event] = None) -> None:
                 is_unknown = detection.name.strip().lower() == "unknown"
 
                 if is_unknown:
-                    # Clear unknown faces are orange; covered/no-face detections stay red.
                     box_color = (0, 165, 255) if risk_normalized == "medium" else (0, 0, 255)
                 elif risk_normalized == "low":
                     box_color = (0, 255, 0)
                 elif risk_normalized == "medium":
                     box_color = (0, 165, 255)
                 else:
-                    # Keep High risk known identities red for safety signaling.
                     box_color = (0, 0, 255)
 
                 cv2.rectangle(annotated_frame, (left, top), (right, bottom), box_color, 2)
@@ -115,63 +163,84 @@ def run_system(stop_event: Optional[Event] = None) -> None:
                     (255, 255, 255),
                     1,
                 )
-                if frame_count % 3 == 0:
-                    if detection.name == "Unknown":
+
+                if is_recognition_frame:
+                    if is_unknown:
                         print(f"Detected: Unknown | Distance: {detection.distance:.4f} | Risk: {risk}")
-                        _recent_detections.append({
-                            "name": "Unknown",
-                            "confidence": 0.0,
-                            "distance": detection.distance,
-                            "risk": risk,
-                        })
+                        h, w = frame.shape[:2]
+                        pad = 30
+                        crop = frame[
+                            max(0, top - pad):min(h, bottom + pad),
+                            max(0, left - pad):min(w, right + pad),
+                        ]
+                        if crop.size > 0:
+                            ok, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                            if ok:
+                                _latest_unknown_face_jpg = buf.tobytes()
                     else:
                         print(
                             f"Detected: {detection.name} | Match: {detection.confidence:.1f}% | "
                             f"Distance: {detection.distance:.4f} | Risk: {risk}"
                         )
-                        _recent_detections.append({
-                            "name": detection.name,
-                            "confidence": detection.confidence,
-                            "distance": detection.distance,
-                            "risk": risk,
-                        })
-                    log_event(detection.name, risk)
-            # Keep the buffer from growing indefinitely
-            if len(_recent_detections) > _MAX_DETECTIONS:
-                _recent_detections.pop(0)
-            cv2.imshow(window_name, annotated_frame)
-            if cv2.waitKey(1) & 0xFF == 27:
-                break
-            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
-                break
+
+                    if _last_logged_risk.get(detection.name) != risk:
+                        log_event(detection.name, risk)
+                        _last_logged_risk[detection.name] = risk
+
+                    new_detection_entries[detection.name] = {
+                        "name": detection.name,
+                        "confidence": detection.confidence,
+                        "distance": detection.distance,
+                        "risk": risk,
+                    }
+
+            # Rebuild the live detections dict from scratch each recognition cycle.
+            if is_recognition_frame:
+                _recent_detections.clear()
+                _recent_detections.update(new_detection_entries)
+
+            # Encode the annotated frame for the browser MJPEG stream.
+            ok, buf = cv2.imencode(".jpg", annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
+            if ok:
+                _latest_frame_jpg = buf.tobytes()
     finally:
         stop_logging()
         cap.release()
-        cv2.destroyAllWindows()
+        global _runner_thread
+        _runner_thread = None
+        _recent_detections.clear()
+        _last_logged_risk.clear()
+        _latest_unknown_face_jpg = None
+        _latest_frame_jpg = None
 
 
 def start_system() -> bool:
-    """Start the camera system in a background thread. Returns True if started, False if already running."""
-    global _runner_thread, _stop_event, _last_start_error
+    global _runner_thread, _stop_event, _last_start_error, _system_ready_event
     if _runner_thread is not None and _runner_thread.is_alive():
         return False
 
     _last_start_error = None
+    _system_ready_event = Event()
     _stop_event = Event()
     _runner_thread = Thread(target=run_system, args=(_stop_event,), daemon=True)
     _runner_thread.start()
 
-    for _ in range(20):
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if _system_ready_event.is_set():
+            return True
         if not _runner_thread.is_alive():
             _runner_thread = None
             return False
-        time.sleep(0.05)
+        time.sleep(0.1)
 
-    return True
+    _stop_event.set()
+    _runner_thread = None
+    _last_start_error = "System took too long to start"
+    return False
 
 
 def stop_system(timeout: float = 5.0) -> bool:
-    """Signal the running system to stop and wait up to `timeout` seconds for it to join."""
     global _runner_thread, _stop_event
     if _runner_thread is None or not _runner_thread.is_alive():
         return False
@@ -189,8 +258,15 @@ def is_system_running() -> bool:
 
 
 def get_recent_detections() -> list:
-    """Return copy of recent detections."""
-    return list(_recent_detections)
+    return list(_recent_detections.values())
+
+
+def get_latest_unknown_face() -> Optional[bytes]:
+    return _latest_unknown_face_jpg
+
+
+def get_latest_frame() -> Optional[bytes]:
+    return _latest_frame_jpg
 
 
 def get_last_start_error() -> Optional[str]:
@@ -198,5 +274,4 @@ def get_last_start_error() -> Optional[str]:
 
 
 if __name__ == "__main__":
-    # allow running directly for local testing
     run_system()

@@ -69,6 +69,43 @@
     background-color: rgba(244, 67, 54, 0.8);
 }
 
+.risk-buttons {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.btn-risk {
+    flex: 1;
+    padding: 6px 0;
+    border-radius: 5px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: 2px solid transparent;
+    opacity: 0.45;
+    transition: opacity 0.2s, transform 0.1s;
+    color: white;
+}
+
+.btn-risk:hover:not(:disabled):not(.active) {
+    opacity: 0.75;
+}
+
+.btn-risk:disabled {
+    cursor: not-allowed;
+}
+
+.btn-risk.active {
+    opacity: 1;
+    border-color: white;
+    transform: scale(1.05);
+}
+
+.btn-risk-low   { background-color: rgba(76, 175, 80, 0.85); }
+.btn-risk-medium { background-color: rgba(255, 152, 0, 0.85); }
+.btn-risk-high  { background-color: rgba(244, 67, 54, 0.85); }
+
 .btn-delete {
     background-color: rgba(255, 255, 255, 0.2);
     color: white;

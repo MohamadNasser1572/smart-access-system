@@ -7,20 +7,18 @@ const projectRoot = resolve(frontendRoot, '..')
 const viteBin = resolve(frontendRoot, 'node_modules', 'vite', 'bin', 'vite.js')
 const statusUrl = 'http://127.0.0.1:8000/status'
 
-const pythonCandidates = [
-  resolve(projectRoot, '.venv', 'Scripts', 'python.exe'),
-  resolve(projectRoot, '.venv311', 'Scripts', 'python.exe'),
-  'python',
-]
-
+// Resolve the Python interpreter to run `python -m uvicorn ...`.
+// The venv interpreter is preferred because that is where the project deps
+// (uvicorn, fastapi, face_recognition, ...) are installed.
 function pickPython() {
-  for (const candidate of pythonCandidates) {
-    if (candidate === 'python' || existsSync(candidate)) {
-      return candidate
-    }
-  }
-
-  return 'python'
+  const candidates = [
+    resolve(projectRoot, '.venv', 'Scripts', 'python.exe'), // Windows venv
+    resolve(projectRoot, '.venv', 'bin', 'python'),          // POSIX venv
+    resolve(projectRoot, '.venv311', 'Scripts', 'python.exe'),
+    resolve(projectRoot, '.venv311', 'bin', 'python'),
+    'python',
+  ]
+  return candidates.find(c => c === 'python' || existsSync(c)) ?? 'python'
 }
 
 async function isBackendReady() {
@@ -54,31 +52,53 @@ function spawnProcess(command, args, options = {}) {
   })
 }
 
+// When this script runs inside an *activated* venv (e.g. VS Code's integrated
+// terminal auto-activates it), the shell injects venv vars. On uv-managed venvs
+// some of these carry a quoted interpreter path that the uv launcher trampoline
+// misreads, producing: No Python at '"C:\...\python.exe'  (exit 103).
+// Build a clean env that drops the activation vars and strips the venv's Scripts
+// dir from PATH, so the interpreter resolves itself from pyvenv.cfg.
+function cleanBackendEnv() {
+  const env = { ...process.env }
+  for (const key of ['VIRTUAL_ENV', 'VIRTUAL_ENV_PROMPT', 'PYTHONHOME', '__PYVENV_LAUNCHER__', 'PYVENV_LAUNCHER']) {
+    delete env[key]
+  }
+
+  // Drop any venv Scripts/bin dir from PATH so it can't shadow or confuse resolution.
+  const venvDirs = [
+    resolve(projectRoot, '.venv', 'Scripts').toLowerCase(),
+    resolve(projectRoot, '.venv', 'bin').toLowerCase(),
+  ]
+  const pathKey = Object.keys(env).find(k => k.toLowerCase() === 'path') ?? 'PATH'
+  const sep = process.platform === 'win32' ? ';' : ':'
+  if (env[pathKey]) {
+    env[pathKey] = env[pathKey]
+      .split(sep)
+      .filter(p => !venvDirs.includes(p.replace(/[/\\]+$/, '').toLowerCase()))
+      .join(sep)
+  }
+
+  env.SMART_ACCESS_DEBUG = process.env.SMART_ACCESS_DEBUG ?? '0'
+  env.OPENBLAS_NUM_THREADS = process.env.OPENBLAS_NUM_THREADS ?? '1'
+  env.OMP_NUM_THREADS = process.env.OMP_NUM_THREADS ?? '1'
+  return env
+}
+
 const python = pickPython()
 const backendAlreadyRunning = await isBackendReady()
 let backendProcess = null
 
 if (!backendAlreadyRunning) {
-  console.log('[dev] Starting backend on http://127.0.0.1:8000 ...')
+  console.log(`[dev] Starting backend on http://127.0.0.1:8000 ... (python: ${python})`)
   backendProcess = spawnProcess(python, [
-    '-m',
-    'uvicorn',
-    'api:app',
-    '--host',
-    '127.0.0.1',
-    '--port',
-    '8000',
-    '--log-level',
-    'warning',
+    '-m', 'uvicorn', 'api:app',
+    '--host', '127.0.0.1',
+    '--port', '8000',
+    '--log-level', 'warning',
     '--no-access-log',
   ], {
     cwd: projectRoot,
-    env: {
-      ...process.env,
-      SMART_ACCESS_DEBUG: process.env.SMART_ACCESS_DEBUG ?? '0',
-      OPENBLAS_NUM_THREADS: process.env.OPENBLAS_NUM_THREADS ?? '1',
-      OMP_NUM_THREADS: process.env.OMP_NUM_THREADS ?? '1',
-    },
+    env: cleanBackendEnv(),
   })
 
   backendProcess.on('exit', (code, signal) => {

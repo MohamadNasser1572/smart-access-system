@@ -1,26 +1,28 @@
 import os
 import base64
-import io
-import os
 
 # Limit BLAS/OMP threads early to reduce memory pressure when native libs load
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
-import sqlite3
+
 from typing import List, Tuple
 
-from fastapi import FastAPI, UploadFile, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 
-from database import DB_PATH, add_face, remove_face, get_all_faces, get_face_risk
+from database import DB_PATH, add_face, remove_face, update_face_risk, get_all_faces, get_face_risk, get_logs
 
 app = FastAPI(title="Smart Access System API")
 
+# Bug 4 fix: allow_credentials=True is incompatible with wildcard origin per the
+# CORS spec — browsers silently drop credentialed responses. Use explicit origins
+# or drop allow_credentials. For a local dev tool we drop allow_credentials.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -37,23 +39,10 @@ class FaceInfo(BaseModel):
     risk_level: str
 
 
+# Bug 3 fix: use the shared DB helper (with lock) instead of a raw sqlite3 connection.
 @app.get("/logs")
-def get_logs() -> List[Tuple[int, str, str]]:
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            risk TEXT
-        )
-        """
-    )
-    cursor.execute("SELECT * FROM logs")
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
+def get_logs_endpoint():
+    return get_logs()
 
 
 @app.get("/faces")
@@ -74,7 +63,6 @@ def enroll_face(request: EnrollRequest) -> dict:
     os.makedirs(known_faces_dir, exist_ok=True)
 
     try:
-        # Import heavy image/face libs lazily to avoid loading them at startup
         import numpy as np
         import cv2
         import face_recognition
@@ -86,7 +74,7 @@ def enroll_face(request: EnrollRequest) -> dict:
         if frame is None:
             raise HTTPException(status_code=400, detail="Invalid image data")
 
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb_frame = np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         face_locations = face_recognition.face_locations(rgb_frame, model="hog")
 
         if not face_locations:
@@ -95,7 +83,12 @@ def enroll_face(request: EnrollRequest) -> dict:
         if len(face_locations) > 1:
             raise HTTPException(status_code=400, detail="Multiple faces detected. Please provide one face per photo")
 
-        person_dir = os.path.join(known_faces_dir, request.name)
+        # Bug 2 fix: reject names that would escape the known_faces/ directory.
+        safe_name = os.path.normpath(request.name.strip())
+        if os.sep in safe_name or safe_name.startswith(".."):
+            raise HTTPException(status_code=400, detail="Invalid character in name")
+
+        person_dir = os.path.join(known_faces_dir, safe_name)
         os.makedirs(person_dir, exist_ok=True)
 
         existing_indices = []
@@ -108,25 +101,25 @@ def enroll_face(request: EnrollRequest) -> dict:
         photo_path = os.path.join(person_dir, f"{next_index}.jpg")
         cv2.imwrite(photo_path, frame)
 
-        if not add_face(request.name, request.risk_level):
-            raise HTTPException(status_code=500, detail=f"Failed to save face record for '{request.name}'")
+        if not add_face(safe_name, request.risk_level):
+            raise HTTPException(status_code=500, detail=f"Failed to save face record for '{safe_name}'")
 
         return {
             "status": "enrolled",
-            "name": request.name,
+            "name": safe_name,
             "risk_level": request.risk_level,
             "photo_index": next_index,
-            "message": f"Saved photo {next_index} for '{request.name}'",
+            "message": f"Saved photo {next_index} for '{safe_name}'",
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to enroll face: {str(e)}")
+    except Exception:
+        # Bug 5 fix: don't leak internal exception details to the client.
+        raise HTTPException(status_code=500, detail="Failed to enroll face")
 
 
 @app.get("/status")
 def get_status() -> dict:
-    # Avoid importing face_recognition_module here (heavy) to keep /status lightweight.
     try:
         faces = get_all_faces()
         loaded_identities = [name for name, _ in faces]
@@ -135,7 +128,6 @@ def get_status() -> dict:
         loaded_identities = []
         loaded_count = 0
 
-    # import main here to check running state; main imports are light now
     try:
         import main as main_module
         system_running = main_module.is_system_running()
@@ -161,7 +153,6 @@ def api_start_system() -> dict:
             error = main_module.get_last_start_error()
             if error:
                 return {"status": "failed", "detail": error}
-
             return {"status": "already_running"}
 
         return {"status": "started"}
@@ -198,21 +189,46 @@ def reload_faces_endpoint() -> dict:
         raise HTTPException(status_code=500, detail=f"Failed to reload faces: {str(e)}")
 
 
+class RiskUpdateRequest(BaseModel):
+    risk_level: str
+
+
+@app.patch("/faces/{name}/risk")
+def update_face_risk_endpoint(name: str, request: RiskUpdateRequest) -> dict:
+    if request.risk_level not in ["Low", "Medium", "High"]:
+        raise HTTPException(status_code=400, detail="Risk level must be Low, Medium, or High")
+
+    safe_name = os.path.normpath(name.strip())
+    if os.sep in safe_name or safe_name.startswith(".."):
+        raise HTTPException(status_code=400, detail="Invalid character in name")
+
+    success = update_face_risk(safe_name, request.risk_level)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Face '{safe_name}' not found")
+
+    return {"status": "updated", "name": safe_name, "risk_level": request.risk_level}
+
+
 @app.delete("/faces/{name}")
 def remove_enrolled_face(name: str) -> dict:
-    success = remove_face(name)
-    if not success:
-        raise HTTPException(status_code=404, detail=f"Face '{name}' not found")
+    # Bug 2 fix: validate name before using it as a filesystem path.
+    safe_name = os.path.normpath(name.strip())
+    if os.sep in safe_name or safe_name.startswith(".."):
+        raise HTTPException(status_code=400, detail="Invalid character in name")
 
-    person_dir = os.path.join("known_faces", name)
+    success = remove_face(safe_name)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Face '{safe_name}' not found")
+
+    person_dir = os.path.join("known_faces", safe_name)
     if os.path.isdir(person_dir):
         import shutil
         shutil.rmtree(person_dir)
 
     return {
         "status": "removed",
-        "name": name,
-        "message": f"Face '{name}' removed successfully",
+        "name": safe_name,
+        "message": f"Face '{safe_name}' removed successfully",
     }
 
 
@@ -224,3 +240,36 @@ def get_detections() -> dict:
         return {"detections": recent}
     except Exception as e:
         return {"detections": [], "error": str(e)}
+
+
+@app.get("/frame")
+def get_frame():
+    """Latest annotated camera frame as a JPEG. Poll this rapidly for live video."""
+    try:
+        import main as main_module
+        jpg = main_module.get_latest_frame()
+        if jpg is None:
+            raise HTTPException(status_code=503, detail="No frame available")
+        return Response(
+            content=jpg,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-store"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/unknown-face")
+def get_unknown_face():
+    try:
+        import main as main_module
+        jpg = main_module.get_latest_unknown_face()
+        if jpg is None:
+            raise HTTPException(status_code=404, detail="No unknown face captured yet")
+        return Response(content=jpg, media_type="image/jpeg")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
