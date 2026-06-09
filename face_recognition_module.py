@@ -167,10 +167,6 @@ _last_face_location: Optional[Tuple[int, int, int, int]] = None
 def recognize(frame) -> List[FaceDetection]:
     global _last_face_seen_at, _last_face_location, _face_gone_since
 
-    if not known_faces:
-        print("No known faces loaded. Add JPG/PNG images to known_faces/ and restart.")
-        return []
-
     small_frame = cv2.resize(frame, None, fx=FACE_RESIZE_SCALE, fy=FACE_RESIZE_SCALE)
     rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
