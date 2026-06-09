@@ -15,8 +15,12 @@ function EnrollmentForm({ onSuccess }) {
   const [stream, setStream] = useState(null)
 
   const loadPhotoFromBlob = (blob) => {
+    // Bug 24 fix: revoke the previous object URL before creating a new one.
+    setPhotoPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return URL.createObjectURL(blob)
+    })
     setPhoto(blob)
-    setPhotoPreview(URL.createObjectURL(blob))
   }
 
   const startCamera = async () => {
@@ -47,7 +51,11 @@ function EnrollmentForm({ onSuccess }) {
       }
     }
 
-    return () => { }
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop())
+      }
+    }
   }, [cameraActive, stream])
 
   const capturePhoto = () => {
@@ -106,45 +114,53 @@ function EnrollmentForm({ onSuccess }) {
     }
 
     if (!photo) {
-      setError('Please take a photo')
+      // Bug 25 fix: message covers both camera capture and file upload paths.
+      setError('Please take or upload a photo')
       return
     }
 
     setLoading(true)
 
+    // Bug 21 fix: wrap the entire async flow (FileReader + fetch) in a Promise
+    // so setLoading(false) only fires after the network call completes, not
+    // immediately after readAsDataURL() kicks off the async read.
+    // Bug 20 fix: use a relative URL so it works through Vite's proxy instead
+    // of hardcoding 127.0.0.1:8000 which breaks on any other machine.
     try {
-      const reader = new FileReader()
-      reader.onloadend = async () => {
-        const base64Photo = reader.result.split(',')[1]
-
-        const response = await fetch('http://127.0.0.1:8000/faces/enroll', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            name: name.trim(),
-            risk_level: riskLevel,
-            photo_base64: base64Photo,
-          }),
-        })
-
-        const data = await response.json()
-
-        if (!response.ok) {
-          setError(data.detail || 'Failed to enroll face')
-          return
+      await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onloadend = async () => {
+          try {
+            const base64Photo = reader.result.split(',')[1]
+            const response = await fetch('/api/faces/enroll', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name: name.trim(),
+                risk_level: riskLevel,
+                photo_base64: base64Photo,
+              }),
+            })
+            const data = await response.json()
+            if (!response.ok) {
+              reject(new Error(data.detail || 'Failed to enroll face'))
+              return
+            }
+            setName('')
+            setRiskLevel('Low')
+            setPhoto(null)
+            setPhotoPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null })
+            onSuccess()
+            resolve()
+          } catch (err) {
+            reject(err)
+          }
         }
-
-        setName('')
-        setRiskLevel('Low')
-        setPhoto(null)
-        setPhotoPreview(null)
-        onSuccess()
-      }
-      reader.readAsDataURL(photo)
+        reader.onerror = () => reject(new Error('Failed to read photo file'))
+        reader.readAsDataURL(photo)
+      })
     } catch (err) {
-      setError('Error: ' + err.message)
+      setError(err.message || 'Enrollment failed')
     } finally {
       setLoading(false)
     }

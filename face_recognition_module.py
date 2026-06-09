@@ -1,10 +1,16 @@
 import os
+import time as _time
+import threading
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import face_recognition
 import numpy as np
+
+# dlib's HOG detector is not thread-safe — serialise all calls to
+# face_locations / face_encodings behind a single process-wide lock.
+dlib_lock = threading.Lock()
 
 
 known_faces: List[np.ndarray] = []
@@ -12,11 +18,7 @@ known_names: List[str] = []
 
 RECOGNITION_TOLERANCE = 0.5
 FACE_RESIZE_SCALE = 0.25
-# Use a smaller scale when loading enrollment images to save memory
-LOAD_IMAGE_SCALE = 0.15
-FRAME_SKIP = 5
 DEBUG = os.getenv("SMART_ACCESS_DEBUG", "0").strip().lower() not in {"0", "false", "no", "off"}
-PERSON_RESIZE_SCALE = 0.5
 
 
 @dataclass(frozen=True)
@@ -41,8 +43,14 @@ def _person_name(root: str, file_path: str) -> str:
 
 
 def load_faces(folder: str = "known_faces") -> None:
+    global _last_face_seen_at, _last_face_location, _face_gone_since
     known_faces.clear()
     known_names.clear()
+    # Reset disappearance tracking so stale "Unknown" state from before the
+    # reload doesn't linger into the next recognition cycle.
+    _last_face_seen_at = 0.0
+    _last_face_location = None
+    _face_gone_since = 0.0
 
     if DEBUG:
         print(f"[debug] load_faces: starting load from '{folder}'")
@@ -82,26 +90,20 @@ def load_faces(folder: str = "known_faces") -> None:
                 image = face_recognition.load_image_file(file_path)
                 if DEBUG:
                     print(f"[debug] load_faces: loaded image from '{file_path}' (shape: {image.shape})")
-                # downscale large enrollment images to reduce memory usage during encoding
-                try:
-                    import cv2 as _cv2
-                    # downscale enrollment images more aggressively
-                    small_image = _cv2.resize(image, None, fx=LOAD_IMAGE_SCALE, fy=LOAD_IMAGE_SCALE)
-                    if DEBUG:
-                        print(f"[debug] load_faces: resized image to {small_image.shape}")
-                except Exception:
-                    small_image = image
             except Exception as e:
                 print(f"[error] load_faces: failed to load image '{file_path}': {e}")
                 continue
 
-            # run detection on the (possibly) downscaled image
+            # Detect and encode using the image exactly as face_recognition loaded it.
+            # Resizing via cv2 produces arrays that dlib rejects; PIL-loaded arrays are safe.
             try:
-                locations = face_recognition.face_locations(small_image, model="hog")
+                with dlib_lock:
+                    locations = face_recognition.face_locations(image, model="hog")
                 if DEBUG:
                     print(f"[debug] load_faces: detected {len(locations)} face(s) in '{file_name}'")
 
-                encodings = face_recognition.face_encodings(small_image, locations)
+                with dlib_lock:
+                    encodings = face_recognition.face_encodings(image, locations)
                 if DEBUG:
                     print(f"[debug] load_faces: extracted {len(encodings)} encoding(s) from '{file_name}'")
             except Exception as ex:
@@ -160,74 +162,57 @@ def _best_match(face_encoding: np.ndarray) -> Tuple[str, float, float]:
     return known_names[best_index], round(confidence, 1), best_distance
 
 
-def _detect_person_presence(frame) -> Tuple[int, int, int, int] | None:
-    """Return an approximate person bounding box when a person is present but no face is visible.
-
-    This is a conservative fallback for cases where someone covers their face.
-    """
-    try:
-        small_frame = cv2.resize(frame, None, fx=PERSON_RESIZE_SCALE, fy=PERSON_RESIZE_SCALE)
-        hog = cv2.HOGDescriptor()
-        hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-        rects, weights = hog.detectMultiScale(
-            small_frame,
-            winStride=(8, 8),
-            padding=(8, 8),
-            scale=1.05,
-        )
-    except Exception as exc:
-        if DEBUG:
-            print(f"[debug] person fallback detection failed: {exc}")
-        return None
-
-    if len(rects) == 0:
-        return None
-
-    best_index = 0
-    if len(weights) == len(rects) and len(weights) > 0:
-        best_index = int(np.argmax(weights))
-    else:
-        best_index = max(range(len(rects)), key=lambda index: rects[index][2] * rects[index][3])
-
-    x, y, w, h = rects[best_index]
-    inverse_scale = int(round(1 / PERSON_RESIZE_SCALE))
-    return (
-        int(y * inverse_scale),
-        int((x + w) * inverse_scale),
-        int((y + h) * inverse_scale),
-        int(x * inverse_scale),
-    )
+_last_face_seen_at: float = 0.0
+_face_gone_since: float = 0.0       # when the face first disappeared this absence
+# Only flag after face has been consistently gone this long (ignores quick movement).
+_FACE_COVER_DELAY = 0.5
+# Stop flagging after this long with no face (person left the frame).
+_FACE_DISAPPEAR_WINDOW = 2.0
+_last_face_location: Optional[Tuple[int, int, int, int]] = None
 
 
 def recognize(frame) -> List[FaceDetection]:
-    if not known_faces:
-        print("No known faces loaded. Add JPG/PNG images to known_faces/ and restart.")
-        return []
+    global _last_face_seen_at, _last_face_location, _face_gone_since
 
     small_frame = cv2.resize(frame, None, fx=FACE_RESIZE_SCALE, fy=FACE_RESIZE_SCALE)
     rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
-    face_locations = face_recognition.face_locations(rgb_small_frame, model="hog")
+    with dlib_lock:
+        face_locations = face_recognition.face_locations(rgb_small_frame, model="hog")
     if not face_locations:
         if DEBUG:
             print("[debug] no faces detected in frame")
-        suspicious_location = _detect_person_presence(frame)
-        if suspicious_location is None:
-            return []
 
-        if DEBUG:
-            print("[debug] person detected without visible face; marking as suspicious unknown")
+        now = _time.monotonic()
 
-        return [
-            FaceDetection(
-                location=suspicious_location,
-                name="Unknown",
-                confidence=0.0,
-                distance=1.0,
-            )
-        ]
+        # Record when the face first disappeared (don't overwrite if already tracking absence).
+        if _face_gone_since == 0.0 and _last_face_seen_at > 0.0:
+            _face_gone_since = now
 
-    face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
+        # Only flag as covered if the face has been consistently absent for at
+        # least _FACE_COVER_DELAY seconds (filters out quick turns/movements).
+        absence_duration = now - _face_gone_since if _face_gone_since > 0.0 else 0.0
+        elapsed_since_seen = now - _last_face_seen_at
+
+        if (
+            _last_face_location is not None
+            and absence_duration >= _FACE_COVER_DELAY
+            and elapsed_since_seen < _FACE_DISAPPEAR_WINDOW
+        ):
+            if DEBUG:
+                print(f"[debug] face covered for {absence_duration:.2f}s — marking as suspicious unknown")
+            return [
+                FaceDetection(
+                    location=_last_face_location,
+                    name="Unknown",
+                    confidence=0.0,
+                    distance=1.0,
+                )
+            ]
+        return []
+
+    with dlib_lock:
+        face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
     if not face_encodings:
         if DEBUG:
             print("[debug] face locations found, but encodings failed")
@@ -253,5 +238,11 @@ def recognize(frame) -> List[FaceDetection]:
             print(
                 f"[debug] face: name={name} confidence={confidence:.1f}% distance={distance:.4f} location={original_location}"
             )
+
+    # Face is visible — reset disappearance tracking.
+    if detections:
+        _last_face_seen_at = _time.monotonic()
+        _last_face_location = detections[0].location
+        _face_gone_since = 0.0  # reset so next absence starts a fresh countdown
 
     return detections
