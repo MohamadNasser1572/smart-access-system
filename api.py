@@ -75,7 +75,9 @@ def enroll_face(request: EnrollRequest) -> dict:
             raise HTTPException(status_code=400, detail="Invalid image data")
 
         rgb_frame = np.ascontiguousarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        face_locations = face_recognition.face_locations(rgb_frame, model="hog")
+        from face_recognition_module import dlib_lock
+        with dlib_lock:
+            face_locations = face_recognition.face_locations(rgb_frame, model="hog")
 
         if not face_locations:
             raise HTTPException(status_code=400, detail="No face detected in photo")

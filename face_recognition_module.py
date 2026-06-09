@@ -1,11 +1,16 @@
 import os
 import time as _time
+import threading
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import cv2
 import face_recognition
 import numpy as np
+
+# dlib's HOG detector is not thread-safe — serialise all calls to
+# face_locations / face_encodings behind a single process-wide lock.
+dlib_lock = threading.Lock()
 
 
 known_faces: List[np.ndarray] = []
@@ -92,11 +97,13 @@ def load_faces(folder: str = "known_faces") -> None:
             # Detect and encode using the image exactly as face_recognition loaded it.
             # Resizing via cv2 produces arrays that dlib rejects; PIL-loaded arrays are safe.
             try:
-                locations = face_recognition.face_locations(image, model="hog")
+                with dlib_lock:
+                    locations = face_recognition.face_locations(image, model="hog")
                 if DEBUG:
                     print(f"[debug] load_faces: detected {len(locations)} face(s) in '{file_name}'")
 
-                encodings = face_recognition.face_encodings(image, locations)
+                with dlib_lock:
+                    encodings = face_recognition.face_encodings(image, locations)
                 if DEBUG:
                     print(f"[debug] load_faces: extracted {len(encodings)} encoding(s) from '{file_name}'")
             except Exception as ex:
@@ -170,7 +177,8 @@ def recognize(frame) -> List[FaceDetection]:
     small_frame = cv2.resize(frame, None, fx=FACE_RESIZE_SCALE, fy=FACE_RESIZE_SCALE)
     rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
 
-    face_locations = face_recognition.face_locations(rgb_small_frame, model="hog")
+    with dlib_lock:
+        face_locations = face_recognition.face_locations(rgb_small_frame, model="hog")
     if not face_locations:
         if DEBUG:
             print("[debug] no faces detected in frame")
@@ -203,7 +211,8 @@ def recognize(frame) -> List[FaceDetection]:
             ]
         return []
 
-    face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
+    with dlib_lock:
+        face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
     if not face_encodings:
         if DEBUG:
             print("[debug] face locations found, but encodings failed")
